@@ -1,0 +1,27 @@
+
+name: Oryx Daily
+
+on:
+  schedule:
+    # GitHub Actions uses UTC. Most of the year Morocco = UTC+1.
+    # 07:30 UTC ≈ 08:30 Africa/Casablanca (adjust during Ramadan if the offset chan$ 
+    - cron: "30 7 * * *"
+  workflow_dispatch:
+
+jobs:
+  run-oryx:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Post Oryx digest to Slack
+        run: python app.py
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+
+
+
