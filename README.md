@@ -1,21 +1,11 @@
-# Pharmacy 300m Visualizer
+# Oryx 🟠 — Daily OGP News (Streamlit)
 
-An interactive map to visualize exclusion buffers (e.g., 300 meters) around existing pharmacies and suggest candidate areas that comply with spacing rules.
+A lightweight app that aggregates **last-24h, OGP-relevant news** for 9 countries:
+Benin, Morocco, Côte d’Ivoire, Senegal, Tunisia, Burkina Faso, Ghana, Liberia, Jordan.
 
-## Quick start
+## Run locally
 ```bash
-npm install
-npm run dev
-```
-
-## Build
-```bash
-npm run build
-```
-
-## Deploy options
-- **Vercel / Netlify:** framework = Vite, build = `npm run build`, output dir = `dist`.
-- **GitHub Pages:** `npm run build && npm run deploy` (uses `gh-pages` to publish `dist/`).
-
-## Data
-Upload a CSV (headers: `name,lat,lon`) or a GeoJSON FeatureCollection of Point features.
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env  # optional if you want Slack share
+streamlit run app.py
