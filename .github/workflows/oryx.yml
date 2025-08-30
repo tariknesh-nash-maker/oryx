@@ -18,7 +18,7 @@ jobs:
           python-version: "3.11"
       - run: pip install -r requirements.txt
       - name: Post Oryx digest to Slack
-        run: python app.py
+        run: python app_cli.py
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
