@@ -102,10 +102,12 @@ def post_to_slack(channel_key: str, text: str, bot_token: str):
         print(f"[ERROR] Failed to post to {channel_key}: {e}")
 
 def build_message(countries, local_tz_name):
+    hours = int(os.environ.get("ORYX_HOURS", "24"))
+    verified_only = os.environ.get("ORYX_VERIFIED_ONLY", "1").lower() not in ("0","false","no")
     now_local = datetime.now(tz.gettz(local_tz_name))
     title = f"*Oryx :large_orange_circle: — {now_local.strftime('%A, %d %B %Y')}*"
     sub = f"_Countries: {', '.join(countries)}_\n"
-    body = generate_digest(countries, hours=24, verified_only=True)
+    body = generate_digest(countries, hours=hours, verified_only=verified_only)
     return f"{title}\n{sub}\n{body}"
 
 def main():
