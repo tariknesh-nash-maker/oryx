@@ -92,6 +92,44 @@ COUNTRY_CONF = {
     },
     # (Optionally add AME verified/media lists later to improve hit-rate)
 }
+COUNTRY_CONF.update({
+    "Benin": {
+        "verified_sites": ["gouv.bj", "sgg.gouv.bj", "assemblee-nationale.bj"],
+        "media_sites": ["lanouvelletribune.info", "ortb.bj", "24haubenin.info"],
+    },
+    "Morocco": {
+        "verified_sites": ["maroc.ma", "cg.gov.ma", "justice.gov.ma", "parlement.ma", "data.gov.ma"],
+        "media_sites": ["le360.ma", "hespress.com", "medi1news.com", "mapnews.ma", "telquel.ma"],
+    },
+    "Côte d’Ivoire": {
+        "verified_sites": ["gouv.ci", "assembleenationale.ci", "presidence.ci", "go.ci"],
+        "media_sites": ["abidjan.net", "fratmat.info", "rtici.ci", "linfodrome.com", "koaci.com"],
+    },
+    "Senegal": {
+        "verified_sites": ["gouv.sn", "assemblee-nationale.sn", "presidence.sn"],
+        "media_sites": ["aps.sn", "seneweb.com", "lequotidien.sn", "lepopulaire.sn"],
+    },
+    "Tunisia": {
+        "verified_sites": ["pm.gov.tn", "gouvernement.tn", "arp.tn", "data.gov.tn"],
+        "media_sites": ["tap.info.tn", "businessnews.com.tn", "lapresse.tn", "kapitalis.com"],
+    },
+    "Burkina Faso": {
+        "verified_sites": ["www.gouvernement.gov.bf", "assembleenationale.bf", "presidence.bf"],
+        "media_sites": ["lefaso.net", "sidwaya.info", "rtb.bf"],
+    },
+    "Ghana": {
+        "verified_sites": ["ghana.gov.gh", "gov.gh", "parliament.gh"],
+        "media_sites": ["graphic.com.gh", "citinewsroom.com", "myjoyonline.com"],
+    },
+    "Liberia": {
+        "verified_sites": ["emansion.gov.lr", "mofa.gov.lr", "moj.gov.lr"],
+        "media_sites": ["frontpageafricaonline.com", "theliberianobserver.com", "news.gov.lr"],
+    },
+    "Jordan": {
+        "verified_sites": ["jordan.gov.jo", "pm.gov.jo", "parliament.jo", "moi.gov.jo"],
+        "media_sites": ["petra.gov.jo", "jordantimes.com", "alrai.com"],
+    },
+})
 
 # Small global allowlist (only if country appears in title/summary)
 GLOBAL_ALLOWED = [
@@ -156,29 +194,37 @@ def _build_queries(country: str, targeted: bool) -> Dict[str, List[str]]:
     topics = " OR ".join(TOPIC_KEYWORDS)
     if targeted and country in COUNTRY_CONF:
         conf = COUNTRY_CONF[country]
-        return {
-            "verified": [f"({topics}) ({names}) ({_q_from_sites(conf['verified_sites'])})"],
-            "media":    [f"({topics}) ({names}) ({_q_from_sites(conf['media_sites'])})"],
-        }
+        # Build one query PER site (more reliable than one giant "site:a OR site:b")
+        ver = [f"({topics}) ({names}) (site:{s})" for s in conf["verified_sites"]]
+        med = [f"({topics}) ({names}) (site:{s})" for s in conf["media_sites"]]
+        return {"verified": ver, "media": med}
     # generic fallback: no site filter in the query string; we’ll filter post-fetch
     return {"generic": [f"({topics}) ({names})"]}
 
 def _allowed_domain_for_country(country: str, dom: str, title: str, summary: str, verified_hint=False) -> bool:
-    # 1) Strong allow: explicit country lists
+    def _endswith_any(d: str, sites: List[str]) -> bool:
+        d = d.lower()
+        for s in sites:
+            s = s.lower()
+            if d == s or d.endswith(s):
+                return True
+        return False
+
+    # 1) Strong allow: explicit per-country lists
     if country in COUNTRY_CONF:
-        if dom in COUNTRY_CONF[country]["verified_sites"] or dom in COUNTRY_CONF[country]["media_sites"]:
+        if _endswith_any(dom, COUNTRY_CONF[country]["verified_sites"]) or _endswith_any(dom, COUNTRY_CONF[country]["media_sites"]):
             return True
 
-    # 2) Local TLDs (e.g., .ba for Bosnia), if the country is mentioned in the text
+    # 2) Local TLDs (e.g., .ba), require the country mentioned in text
     for tld in COUNTRY_TLDS.get(country, []):
         if dom.endswith(tld) and _contains_country(f"{title} {summary}", country):
             return True
 
-    # 3) Global allowlist (EU, WB, AfDB, etc.) — only if the country is clearly mentioned
-    if any(dom.endswith(g) or dom == g for g in GLOBAL_ALLOWED):
+    # 3) Global allowlist (EU, WB, etc.) — only if the country is clearly mentioned
+    if any(dom == g or dom.endswith(g) for g in GLOBAL_ALLOWED):
         return _contains_country(f"{title} {summary}", country)
 
-    # 4) Verified heuristics (gov/parliament) for countries without explicit conf
+    # 4) Heuristic verified for countries without explicit conf
     if verified_hint:
         if re.search(r"(gov|gouv|parliament|parlament|senat|senate|assemblee|data\.gov)", dom):
             return _contains_country(f"{title} {summary}", country)
@@ -218,6 +264,48 @@ def _collect_for(country: str, hours: int) -> Tuple[List[Dict], List[Dict]]:
                         allow = _allowed_domain_for_country(country, dom, title, summary, verified_hint=False)
                         if allow:
                             media.append(item)
+        # ---------- Fallbacks to ensure fresh items ----------
+    if not verified and not media:
+        # (A) Site-only fallback on official sites (no topic keywords)
+        if country in COUNTRY_CONF:
+            conf = COUNTRY_CONF[country]
+            for site in conf["verified_sites"]:
+                for (lang, glc, ce) in [(hl, gl, ceid), ("en","US","US:en")]:
+                    feed_url = _gn_rss(f"site:{site}", lang, glc, ce)
+                    parsed = feedparser.parse(feed_url)
+                    for e in parsed.entries:
+                        dt = _ts(e)
+                        if not dt or dt < cutoff: 
+                            continue
+                        link = e.get("link") or ""
+                        title = html.unescape(e.get("title","")).strip()
+                        summary = html.unescape(e.get("summary","")).strip()
+                        dom = _domain(link)
+                        # official domain ⇒ accept; otherwise require country mention
+                        if dom.endswith(site) or _contains_country(title + " " + summary, country):
+                            verified.append({"title": title, "link": link, "summary": summary, "domain": dom, "time": dt})
+
+        # (B) Name-only local fallback (no topics), constrained by local TLD / global allow + country mention
+        if not verified and not media:
+            names_only = " OR ".join([f'"{n}"' for n in _names(country)])
+            for (lang, glc, ce) in [(hl, gl, ceid), ("en","US","US:en")]:
+                feed_url = _gn_rss(f"({names_only})", lang, glc, ce)
+                parsed = feedparser.parse(feed_url)
+                for e in parsed.entries:
+                    dt = _ts(e)
+                    if not dt or dt < cutoff:
+                        continue
+                    link = e.get("link") or ""
+                    title = html.unescape(e.get("title","")).strip()
+                    summary = html.unescape(e.get("summary","")).strip()
+                    dom = _domain(link)
+                    if not _contains_country(title + " " + summary, country):
+                        continue
+                    # local TLD or global allowlist
+                    is_local = any(dom.endswith(tld) for tld in COUNTRY_TLDS.get(country, []))
+                    is_global = any(dom == g or dom.endswith(g) for g in GLOBAL_ALLOWED)
+                    if is_local or is_global:
+                        media.append({"title": title, "link": link, "summary": summary, "domain": dom, "time": dt})
 
     return _dedupe(verified), _dedupe(media)
 
