@@ -1,6 +1,6 @@
 # oryx_core/digest.py
 from __future__ import annotations
-import html, time, urllib.parse, re
+import os, html, time, urllib.parse, re
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Tuple, Set, Iterable
 import feedparser
@@ -15,7 +15,7 @@ ALT_NAMES = {
     "Malta": ["Malta"],
     "Serbia": ["Serbia", "Srbija"],
     "Slovakia": ["Slovakia", "Slovensko"],
-    # AME (so we cover your other channel too)
+    # AME
     "Benin": ["Benin"],
     "Morocco": ["Morocco", "Maroc", "المغرب"],
     "Côte d’Ivoire": ["Côte d’Ivoire", "Cote d'Ivoire", "Ivory Coast", "CIV"],
@@ -64,8 +64,8 @@ COUNTRY_TLDS = {
     "Jordan": [".jo"],
 }
 
-# Per-country precision source lists
-COUNTRY_CONF = {
+# Per-country precision source lists (verified + reputable media)
+COUNTRY_CONF: Dict[str, Dict[str, List[str]]] = {
     "Austria": {
         "verified_sites": ["parlament.gv.at", "bundeskanzleramt.gv.at", "data.gv.at", "gv.at"],
         "media_sites":    ["orf.at", "derstandard.at", "kurier.at", "diepresse.com", "profil.at", "wienerzeitung.at"],
@@ -90,44 +90,43 @@ COUNTRY_CONF = {
         "verified_sites": ["gov.sk", "nrsr.sk", "data.gov.sk"],
         "media_sites":    ["sme.sk", "dennikn.sk", "aktuality.sk", "pravda.sk", "teraz.sk", "tasr.sk"],
     },
-    # (Optionally add AME verified/media lists later to improve hit-rate)
 }
 COUNTRY_CONF.update({
     "Benin": {
         "verified_sites": ["gouv.bj", "sgg.gouv.bj", "assemblee-nationale.bj"],
-        "media_sites": ["lanouvelletribune.info", "ortb.bj", "24haubenin.info"],
+        "media_sites":    ["lanouvelletribune.info", "ortb.bj", "24haubenin.info"],
     },
     "Morocco": {
         "verified_sites": ["maroc.ma", "cg.gov.ma", "justice.gov.ma", "parlement.ma", "data.gov.ma"],
-        "media_sites": ["le360.ma", "hespress.com", "medi1news.com", "mapnews.ma", "telquel.ma"],
+        "media_sites":    ["le360.ma", "hespress.com", "medi1news.com", "mapnews.ma", "telquel.ma"],
     },
     "Côte d’Ivoire": {
         "verified_sites": ["gouv.ci", "assembleenationale.ci", "presidence.ci", "go.ci"],
-        "media_sites": ["abidjan.net", "fratmat.info", "rtici.ci", "linfodrome.com", "koaci.com"],
+        "media_sites":    ["abidjan.net", "fratmat.info", "rtici.ci", "linfodrome.com", "koaci.com"],
     },
     "Senegal": {
         "verified_sites": ["gouv.sn", "assemblee-nationale.sn", "presidence.sn"],
-        "media_sites": ["aps.sn", "seneweb.com", "lequotidien.sn", "lepopulaire.sn"],
+        "media_sites":    ["aps.sn", "seneweb.com", "lequotidien.sn", "lepopulaire.sn"],
     },
     "Tunisia": {
         "verified_sites": ["pm.gov.tn", "gouvernement.tn", "arp.tn", "data.gov.tn"],
-        "media_sites": ["tap.info.tn", "businessnews.com.tn", "lapresse.tn", "kapitalis.com"],
+        "media_sites":    ["tap.info.tn", "businessnews.com.tn", "lapresse.tn", "kapitalis.com"],
     },
     "Burkina Faso": {
-        "verified_sites": ["www.gouvernement.gov.bf", "assembleenationale.bf", "presidence.bf"],
-        "media_sites": ["lefaso.net", "sidwaya.info", "rtb.bf"],
+        "verified_sites": ["gouvernement.gov.bf", "assembleenationale.bf", "presidence.bf"],
+        "media_sites":    ["lefaso.net", "sidwaya.info", "rtb.bf"],
     },
     "Ghana": {
         "verified_sites": ["ghana.gov.gh", "gov.gh", "parliament.gh"],
-        "media_sites": ["graphic.com.gh", "citinewsroom.com", "myjoyonline.com"],
+        "media_sites":    ["graphic.com.gh", "citinewsroom.com", "myjoyonline.com"],
     },
     "Liberia": {
         "verified_sites": ["emansion.gov.lr", "mofa.gov.lr", "moj.gov.lr"],
-        "media_sites": ["frontpageafricaonline.com", "theliberianobserver.com", "news.gov.lr"],
+        "media_sites":    ["frontpageafricaonline.com", "theliberianobserver.com", "news.gov.lr"],
     },
     "Jordan": {
         "verified_sites": ["jordan.gov.jo", "pm.gov.jo", "parliament.jo", "moi.gov.jo"],
-        "media_sites": ["petra.gov.jo", "jordantimes.com", "alrai.com"],
+        "media_sites":    ["petra.gov.jo", "jordantimes.com", "alrai.com"],
     },
 })
 
@@ -138,7 +137,7 @@ GLOBAL_ALLOWED = [
     "undp.org", "un.org", "news.un.org", "osce.org", "ebrd.com",
 ]
 
-# Topics (OGP-ish, multilingual hints)
+# Topic hints (assist discovery; final filter is themes)
 TOPIC_KEYWORDS = [
     '"open government"', "transparency", '"access to information"', "whistleblower",
     '"beneficial ownership"', '"open data"', "anticorruption", "anti-corruption",
@@ -149,7 +148,77 @@ TOPIC_KEYWORDS = [
     "شفافية", "وصول إلى المعلومات", "البيانات المفتوحة",
 ]
 
+# --- THEMES (OGP focus) ---
+THEMES = {
+    "Open Government": [
+        "open government", "open gov", "ogp", "open governance",
+        "offene regierung", "vláda otevřená", "otvorená vláda", "otvorena vlada",
+    ],
+    "Access to Information": [
+        "access to information", "freedom of information", "foi", "foia", "rti",
+        "informationsfreiheit", "právo na informace", "pravo na pristup informacijama",
+        "slobodan pristup informacijama", "prístup k informáciám", "pristup informacijama",
+        "accès à l'information", "حق الوصول إلى المعلومات",
+    ],
+    "Anti-Corruption": [
+        "anti-corruption", "anticorruption", "corruption", "bribery", "integrity",
+        "korupce", "korupcia", "korupcija", "bestechung",
+    ],
+    "Civic Space": [
+        "civic space", "civil society", "ngo law", "freedom of association", "assembly", "protest",
+        "udruženja", "nevladine organizacije", "nvo", "občianske združenie", "spolek",
+    ],
+    "Climate and Environment": [
+        "climate", "emissions", "carbon", "co2", "environment", "biodiversity", "air quality",
+        "klima", "umwelt", "životní prostředí", "životné prostredie", "životna sredina", "okoliš",
+    ],
+    "Digital Governance": [
+        "digital government", "e-government", "egov", "digital identity", "eid", "ai policy",
+        "cybersecurity", "govtech", "open data", "data portal",
+        "e-government", "e-úrad", "eidas", "digitální", "digitálne",
+    ],
+    "Fiscal Openness": [
+        "budget transparency", "open budget", "procurement", "public procurement", "tenders",
+        "spending", "fiscal", "beneficial ownership", "tax transparency",
+        "verejné obstarávanie", "veřejné zakázky", "javne nabavke",
+    ],
+    "Gender and Inclusion": [
+        "gender", "women", "equality", "inclusion", "disability", "lgbt",
+        "rovnosť", "rovnost", "ravnopravnost", "gleichstellung",
+    ],
+    "Justice": [
+        "justice", "judiciary", "court", "prosecution", "rule of law", "whistleblower",
+        "pravosudje", "pravosuđe", "súd", "soud", "gericht",
+    ],
+    "Media Freedom": [
+        "media freedom", "press freedom", "journalist", "defamation",
+        "sloboda medija", "svoboda tisku", "medienfreiheit",
+    ],
+    "Public Participation": [
+        "public consultation", "participation", "citizen engagement", "petition", "referendum",
+        "verejná konzultácia", "účast verejnosti", "javna rasprava", "javna konsultacija", "mitbestimmung",
+    ],
+}
+
+# Optional: narrow themes via env ORYX_THEMES="Justice, Media Freedom"
+ENABLED_THEMES = None
+_env_themes = os.environ.get("ORYX_THEMES")
+if _env_themes:
+    ENABLED_THEMES = {t.strip() for t in _env_themes.split(",") if t.strip() in THEMES}
+
 # ---------- Helpers ----------
+def _match_themes(text: str) -> List[str]:
+    text_l = text.lower()
+    out = []
+    for theme, kws in THEMES.items():
+        if ENABLED_THEMES and theme not in ENABLED_THEMES:
+            continue
+        for kw in kws:
+            if kw.lower() in text_l:
+                out.append(theme)
+                break
+    return out
+
 def _gn_rss(query: str, hl: str, gl: str, ceid: str) -> str:
     q = urllib.parse.quote(query)
     return f"https://news.google.com/rss/search?q={q}&hl={hl}&gl={gl}&ceid={ceid}"
@@ -178,6 +247,9 @@ def _contains_country(txt: str, country: str) -> bool:
             return True
     return False
 
+def _is_local_domain(country: str, dom: str) -> bool:
+    return any(dom.endswith(tld) for tld in COUNTRY_TLDS.get(country, []))
+
 def _dedupe(items: List[Dict]) -> List[Dict]:
     seen: Set[str] = set(); out=[]
     for it in items:
@@ -186,49 +258,44 @@ def _dedupe(items: List[Dict]) -> List[Dict]:
             seen.add(key); out.append(it)
     return out
 
-def _q_from_sites(sites: Iterable[str]) -> str:
-    return " OR ".join([f"site:{s}" for s in sites])
+def _endswith_any(d: str, sites: List[str]) -> bool:
+    d = d.lower()
+    for s in sites:
+        s = s.lower()
+        if d == s or d.endswith(s):
+            return True
+    return False
+
+def _is_verified_domain(country: str, dom: str) -> bool:
+    if country in COUNTRY_CONF and _endswith_any(dom, COUNTRY_CONF[country]["verified_sites"]):
+        return True
+    # Heuristic for countries w/o explicit lists
+    return bool(re.search(r"(gov|gouv|parliament|parlament|senat|senate|assemblee|data\.gov)", dom))
 
 def _build_queries(country: str, targeted: bool) -> Dict[str, List[str]]:
     names = " OR ".join([f'"{n}"' for n in _names(country)])
     topics = " OR ".join(TOPIC_KEYWORDS)
     if targeted and country in COUNTRY_CONF:
         conf = COUNTRY_CONF[country]
-        # Build one query PER site (more reliable than one giant "site:a OR site:b")
         ver = [f"({topics}) ({names}) (site:{s})" for s in conf["verified_sites"]]
         med = [f"({topics}) ({names}) (site:{s})" for s in conf["media_sites"]]
         return {"verified": ver, "media": med}
-    # generic fallback: no site filter in the query string; we’ll filter post-fetch
     return {"generic": [f"({topics}) ({names})"]}
 
 def _allowed_domain_for_country(country: str, dom: str, title: str, summary: str, verified_hint=False) -> bool:
-    def _endswith_any(d: str, sites: List[str]) -> bool:
-        d = d.lower()
-        for s in sites:
-            s = s.lower()
-            if d == s or d.endswith(s):
-                return True
-        return False
-
     # 1) Strong allow: explicit per-country lists
     if country in COUNTRY_CONF:
         if _endswith_any(dom, COUNTRY_CONF[country]["verified_sites"]) or _endswith_any(dom, COUNTRY_CONF[country]["media_sites"]):
             return True
-
-    # 2) Local TLDs (e.g., .ba), require the country mentioned in text
-    for tld in COUNTRY_TLDS.get(country, []):
-        if dom.endswith(tld) and _contains_country(f"{title} {summary}", country):
-            return True
-
-    # 3) Global allowlist (EU, WB, etc.) — only if the country is clearly mentioned
+    # 2) Local TLDs if the country is mentioned
+    if _is_local_domain(country, dom) and _contains_country(f"{title} {summary}", country):
+        return True
+    # 3) Global allowlist (EU, WB, etc.) if the country is clearly mentioned
     if any(dom == g or dom.endswith(g) for g in GLOBAL_ALLOWED):
         return _contains_country(f"{title} {summary}", country)
-
     # 4) Heuristic verified for countries without explicit conf
-    if verified_hint:
-        if re.search(r"(gov|gouv|parliament|parlament|senat|senate|assemblee|data\.gov)", dom):
-            return _contains_country(f"{title} {summary}", country)
-
+    if verified_hint and _is_verified_domain(country, dom):
+        return _contains_country(f"{title} {summary}", country)
     return False
 
 # ---------- Collectors ----------
@@ -236,12 +303,12 @@ def _collect_for(country: str, hours: int) -> Tuple[List[Dict], List[Dict]]:
     hl, gl, ceid = _locale(country)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-    verified, media = [], []
+    verified: List[Dict] = []
+    media: List[Dict] = []
     qsets = _build_queries(country, targeted=True) if country in COUNTRY_CONF else _build_queries(country, targeted=False)
 
     for label, qlist in qsets.items():
         for q in qlist:
-            # try local feed; then english fallback for breadth
             for (lang, glc, ce) in [(hl, gl, ceid), ("en","US","US:en")]:
                 feed_url = _gn_rss(q, lang, glc, ce)
                 parsed = feedparser.parse(feed_url)
@@ -253,20 +320,27 @@ def _collect_for(country: str, hours: int) -> Tuple[List[Dict], List[Dict]]:
                     title = html.unescape(e.get("title", "")).strip()
                     summary = html.unescape(e.get("summary", "")).strip()
                     dom = _domain(link)
-                    item = {"title": title, "link": link, "summary": summary, "domain": dom, "time": dt}
 
-                    # Post-filtering to avoid irrelevant (e.g., US) stories:
-                    if label in ("verified",):
-                        allow = _allowed_domain_for_country(country, dom, title, summary, verified_hint=True)
-                        if allow:
-                            verified.append(item)
-                    else:
-                        allow = _allowed_domain_for_country(country, dom, title, summary, verified_hint=False)
-                        if allow:
-                            media.append(item)
-        # ---------- Fallbacks to ensure fresh items ----------
+                    # THEME filter (must match ≥1)
+                    themes = _match_themes(f"{title} {summary}")
+                    if not themes:
+                        continue
+
+                    # Domain allow
+                    allow = _allowed_domain_for_country(country, dom, title, summary, verified_hint=(label == "verified"))
+                    if not allow:
+                        continue
+
+                    item = {
+                        "title": title, "link": link, "summary": summary,
+                        "domain": dom, "time": dt, "themes": themes,
+                        "verified": (label == "verified") or _is_verified_domain(country, dom),
+                    }
+                    (verified if item["verified"] else media).append(item)
+
+    # ---------- Fallbacks if zero after theme filter ----------
     if not verified and not media:
-        # (A) Site-only fallback on official sites (no topic keywords)
+        # (A) site-only on official domains (no topic keywords), still theme-required
         if country in COUNTRY_CONF:
             conf = COUNTRY_CONF[country]
             for site in conf["verified_sites"]:
@@ -275,17 +349,21 @@ def _collect_for(country: str, hours: int) -> Tuple[List[Dict], List[Dict]]:
                     parsed = feedparser.parse(feed_url)
                     for e in parsed.entries:
                         dt = _ts(e)
-                        if not dt or dt < cutoff: 
+                        if not dt or dt < cutoff:
                             continue
                         link = e.get("link") or ""
                         title = html.unescape(e.get("title","")).strip()
                         summary = html.unescape(e.get("summary","")).strip()
                         dom = _domain(link)
-                        # official domain ⇒ accept; otherwise require country mention
-                        if dom.endswith(site) or _contains_country(title + " " + summary, country):
-                            verified.append({"title": title, "link": link, "summary": summary, "domain": dom, "time": dt})
+                        themes = _match_themes(f"{title} {summary}")
+                        if not themes:
+                            continue
+                        verified.append({
+                            "title": title, "link": link, "summary": summary,
+                            "domain": dom, "time": dt, "themes": themes, "verified": True
+                        })
 
-        # (B) Name-only local fallback (no topics), constrained by local TLD / global allow + country mention
+        # (B) name-only local fallback (country mention + local TLD/global), still theme-required
         if not verified and not media:
             names_only = " OR ".join([f'"{n}"' for n in _names(country)])
             for (lang, glc, ce) in [(hl, gl, ceid), ("en","US","US:en")]:
@@ -301,11 +379,16 @@ def _collect_for(country: str, hours: int) -> Tuple[List[Dict], List[Dict]]:
                     dom = _domain(link)
                     if not _contains_country(title + " " + summary, country):
                         continue
-                    # local TLD or global allowlist
-                    is_local = any(dom.endswith(tld) for tld in COUNTRY_TLDS.get(country, []))
+                    themes = _match_themes(f"{title} {summary}")
+                    if not themes:
+                        continue
+                    is_local = _is_local_domain(country, dom)
                     is_global = any(dom == g or dom.endswith(g) for g in GLOBAL_ALLOWED)
                     if is_local or is_global:
-                        media.append({"title": title, "link": link, "summary": summary, "domain": dom, "time": dt})
+                        media.append({
+                            "title": title, "link": link, "summary": summary,
+                            "domain": dom, "time": dt, "themes": themes, "verified": False
+                        })
 
     return _dedupe(verified), _dedupe(media)
 
@@ -314,9 +397,10 @@ def generate_digest(countries: List[str], hours: int = 24, verified_only: bool =
     """
     Country-targeted Google News with:
       • strict recency (last `hours`)
+      • OGP THEMES filter (must match at least one)
       • verified-first & local TLD filtering
       • global de-dup across countries
-      • per-country metrics (counts, verified %, top sources)
+      • per-country metrics (counts, themes, top sources)
     Returns Slack-ready Markdown.
     """
     global_seen: Set[str] = set()
@@ -328,7 +412,7 @@ def generate_digest(countries: List[str], hours: int = 24, verified_only: bool =
         items = v if (verified_only and v) else (v + m)
 
         # Global de-dup across all countries in this run
-        unique = []
+        unique: List[Dict] = []
         for it in items:
             key = it["link"] or (it["title"] + it["domain"])
             if key in global_seen:
@@ -338,19 +422,27 @@ def generate_digest(countries: List[str], hours: int = 24, verified_only: bool =
 
         # Quant metrics
         total = len(unique)
-        vcount = sum(1 for it in unique if it in v)
+        vcount = sum(1 for it in unique if it.get("verified"))
         mcount = total - vcount
         top_src = ", ".join(f"{dom} ({cnt})" for dom, cnt in Counter(it["domain"] for it in unique).most_common(3))
+        by_theme = Counter(t for it in unique for t in it.get("themes", []))
+        top_themes = ", ".join(f"{t} ({n})" for t, n in by_theme.most_common(3))
 
-        # Qual + Quant header line
-        lines = [f"*{c} — {total} items ({vcount}✅/{mcount}📰){' | Top: ' + top_src if total else ''}*"]
+        # Header with metrics
+        lines = [f"*{c} — {total} items ({vcount}✅/{mcount}📰)"
+                 f"{' | Themes: ' + top_themes if total else ''}"
+                 f"{' | Top: ' + top_src if total else ''}*"]
 
         if not unique:
-            lines.append(f"• No verified items in the past {hours}h.")
+            lines.append(f"• No theme-matching items in the past {hours}h.")
         else:
+            # Rank: verified → #themes matched → recency (newest first)
+            unique.sort(key=lambda it: (it.get('verified', False), len(it.get('themes', [])), it['time']),
+                        reverse=True)
             for it in unique[:6]:  # up to 6 items per country
-                badge = "✅" if it in v else "📰"
-                lines.append(f"• {badge} {it['title']} — <{it['link']}|{it['domain']}>")
+                badge = "✅" if it.get("verified") else "📰"
+                tlist = ", ".join(it.get("themes", []))
+                lines.append(f"• {badge} {it['title']} — <{it['link']}|{it['domain']}> _(themes: {tlist})_")
 
         blocks.append("\n".join(lines) + "\n")
 
